@@ -3,6 +3,8 @@ set -e
 
 REPO="0206pdh/dockimage_scanner"
 TOOL="imgadvisor"
+VENV_DIR="${HOME}/.imgadvisor"
+BIN_DIR="${HOME}/.local/bin"
 MIN_PYTHON_MINOR=11
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -22,71 +24,46 @@ for cmd in python3.13 python3.12 python3.11 python3 python; do
   fi
 done
 
-if [ -z "$PYTHON" ]; then
-  error "Python 3.${MIN_PYTHON_MINOR}+ 이 필요합니다.
-  Ubuntu/Debian: sudo apt update && sudo apt install -y python3.11
-  macOS:         brew install python@3.11"
-fi
+[ -z "$PYTHON" ] && error "Python 3.${MIN_PYTHON_MINOR}+ 이 필요합니다."
 info "Python: $($PYTHON --version)"
 
 # ── git 확인 ────────────────────────────────────────────────────────────────
 if ! command -v git &>/dev/null; then
-  warn "git 없음 — 자동 설치 시도..."
+  info "git 설치 중..."
   if command -v apt-get &>/dev/null; then
-    apt-get install -y git 2>/dev/null || sudo apt-get install -y git || error "git 설치 실패"
+    apt-get install -y git 2>/dev/null || sudo apt-get install -y git
   elif command -v yum &>/dev/null; then
-    yum install -y git 2>/dev/null || sudo yum install -y git || error "git 설치 실패"
+    yum install -y git 2>/dev/null || sudo yum install -y git
   else
     error "git 이 없습니다. 수동으로 설치하세요."
   fi
 fi
 
-# ── pipx 우선 시도 → pip fallback ───────────────────────────────────────────
-install_with_pipx() {
-  if ! command -v pipx &>/dev/null; then
-    info "pipx 설치 중..."
-    if command -v apt-get &>/dev/null; then
-      apt-get install -y pipx 2>/dev/null || sudo apt-get install -y pipx || return 1
-    else
-      "$PYTHON" -m pip install --quiet pipx 2>/dev/null || return 1
-    fi
-  fi
-  info "pipx로 설치 중..."
-  pipx install "git+https://github.com/${REPO}.git" --force
-  pipx ensurepath
-}
+# ── venv 생성 (시스템 Python 건드리지 않음) ──────────────────────────────────
+info "가상환경 생성 중: ${VENV_DIR}"
+"$PYTHON" -m venv "$VENV_DIR"
 
-install_with_pip() {
-  if ! "$PYTHON" -m pip --version &>/dev/null 2>&1; then
-    if command -v apt-get &>/dev/null; then
-      apt-get install -y python3-pip 2>/dev/null || sudo apt-get install -y python3-pip
-    fi
-  fi
-  info "pip으로 설치 중..."
-  # externally-managed-environment (PEP 668) 대응: --break-system-packages
-  "$PYTHON" -m pip install --quiet --upgrade \
-    --break-system-packages \
-    "git+https://github.com/${REPO}.git" 2>/dev/null \
-  || "$PYTHON" -m pip install --quiet --upgrade \
-    "git+https://github.com/${REPO}.git"
-}
+VENV_PIP="${VENV_DIR}/bin/pip"
+VENV_PYTHON="${VENV_DIR}/bin/python"
 
+# ── venv 안에서 pip 업그레이드 후 설치 ───────────────────────────────────────
 info "설치 중... (github.com/${REPO})"
-if ! install_with_pipx 2>/dev/null; then
-  warn "pipx 실패, pip으로 재시도..."
-  install_with_pip
+"$VENV_PIP" install --quiet --upgrade pip
+"$VENV_PIP" install --quiet "git+https://github.com/${REPO}.git"
+
+# ── ~/.local/bin 에 심볼릭 링크 ──────────────────────────────────────────────
+mkdir -p "$BIN_DIR"
+ln -sf "${VENV_DIR}/bin/${TOOL}" "${BIN_DIR}/${TOOL}"
+info "심볼릭 링크: ${BIN_DIR}/${TOOL} -> ${VENV_DIR}/bin/${TOOL}"
+
+# ── PATH 확인 ────────────────────────────────────────────────────────────────
+if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
+  export PATH="${BIN_DIR}:$PATH"
+  warn "PATH에 ${BIN_DIR} 추가됨. 영구 적용:"
+  warn "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc && source ~/.bashrc"
 fi
 
-# ── PATH 처리 ────────────────────────────────────────────────────────────────
-for extra_path in "$HOME/.local/bin" "$HOME/.local/pipx/venvs/imgadvisor/bin"; do
-  if [ -f "$extra_path/$TOOL" ] && [[ ":$PATH:" != *":$extra_path:"* ]]; then
-    export PATH="$extra_path:$PATH"
-    warn "PATH에 $extra_path 추가됨. 영구 적용:"
-    warn "  echo 'export PATH=\"$extra_path:\$PATH\"' >> ~/.bashrc && source ~/.bashrc"
-  fi
-done
-
-# ── 확인 ─────────────────────────────────────────────────────────────────────
+# ── 완료 ─────────────────────────────────────────────────────────────────────
 if command -v "$TOOL" &>/dev/null; then
   info "설치 완료!"
   echo ""
@@ -96,8 +73,11 @@ if command -v "$TOOL" &>/dev/null; then
   echo "    imgadvisor validate  --dockerfile Dockerfile --optimized optimized.Dockerfile"
   echo ""
   echo "  도움말: imgadvisor --help"
+  echo ""
+  echo "  업데이트:"
+  echo "    ${VENV_PIP} install --upgrade git+https://github.com/${REPO}.git"
 else
-  warn "설치는 완료됐으나 명령어를 찾을 수 없습니다. 새 터미널을 열거나:"
-  warn "  source ~/.bashrc"
-  warn "  또는: export PATH=\"\$HOME/.local/bin:\$PATH\""
+  warn "설치 완료됐으나 명령어를 찾을 수 없습니다."
+  warn "새 터미널을 열거나: export PATH=\"\$HOME/.local/bin:\$PATH\""
+  warn "직접 실행: ${VENV_DIR}/bin/${TOOL} --help"
 fi
