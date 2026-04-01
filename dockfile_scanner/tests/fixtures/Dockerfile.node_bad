@@ -1,0 +1,11 @@
+# 안 좋은 Node.js Dockerfile 예시 — imgadvisor 테스트용
+FROM node:20
+
+WORKDIR /app
+
+COPY . .
+
+RUN npm install
+
+EXPOSE 3000
+CMD ["node", "src/index.js"]
