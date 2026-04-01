@@ -49,7 +49,7 @@ VENV_PYTHON="${VENV_DIR}/bin/python"
 # ── venv 안에서 pip 업그레이드 후 설치 ───────────────────────────────────────
 info "설치 중... (github.com/${REPO})"
 "$VENV_PIP" install --quiet --upgrade pip
-"$VENV_PIP" install --quiet "git+https://github.com/${REPO}.git"
+"$VENV_PIP" install --quiet --force-reinstall "git+https://github.com/${REPO}.git"
 
 # ── ~/.local/bin 에 심볼릭 링크 ──────────────────────────────────────────────
 mkdir -p "$BIN_DIR"
