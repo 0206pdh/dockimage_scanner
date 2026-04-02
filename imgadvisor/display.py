@@ -290,24 +290,27 @@ def print_layers(analysis: "LayerAnalysis") -> None:  # type: ignore[name-define
     """
     from imgadvisor.layer_analyzer import LayerAnalysis  # local import avoids circular
 
-    console.print()
-    console.print(f"  [bold]imgadvisor[/bold]  [dim]{analysis.dockerfile_path}[/dim]")
-    console.print(
-        f"  [dim]layer analysis[/dim]  "
-        f"[bold]{analysis.total_mb:.1f} MB[/bold]  "
-        f"[dim]{analysis.layer_count} layers[/dim]"
-    )
-    console.print()
-    console.print(Rule(style="dim"))
-
-    _LARGE_THRESHOLD = 50 * 1_000_000  # 50 MB in SI bytes
+    _LARGE_THRESHOLD = 50 * 1_000_000  # 50 MB
 
     nonempty = analysis.nonempty_layers
     zero_count = analysis.layer_count - len(nonempty)
+    history_mb = analysis.history_total_bytes / 1_000_000
+
+    console.print()
+    console.print(f"  [bold]imgadvisor[/bold]  [dim]{analysis.dockerfile_path}[/dim]")
+    console.print(
+        f"  [dim]image size[/dim] [bold]{analysis.total_mb:.1f} MB[/bold]  "
+        f"[dim]layers[/dim] {analysis.layer_count}  "
+        f"[dim]uncompressed layer content[/dim] {history_mb:.1f} MB"
+    )
+    # Note: docker history sizes are uncompressed layer deltas and may sum to more
+    # than the final image size due to union filesystem deduplication/whiteouts.
+    console.print()
+    console.print(Rule(style="dim"))
 
     for layer in nonempty:
         pct = analysis.size_pct(layer)
-        mb = layer.size_bytes / 1_000_000  # SI MB for consistency with docker history
+        mb = layer.size_bytes / 1_000_000
         large_flag = "  [bold red][!][/bold red]" if layer.size_bytes >= _LARGE_THRESHOLD else ""
 
         console.print(
@@ -333,7 +336,7 @@ def print_layers(analysis: "LayerAnalysis") -> None:  # type: ignore[name-define
         console.print(
             f"  [bold red]{len(large_layers)} large layer{'s' if len(large_layers) > 1 else ''}[/bold red]"
             f"  [dim](>50 MB)[/dim]  [bold]{large_mb:.1f} MB[/bold]"
-            f"  [dim]({large_pct:.1f}% of total)[/dim]"
+            f"  [dim]({large_pct:.1f}% of uncompressed layers)[/dim]"
         )
     else:
         console.print("  [bold green]No large layers detected.[/bold green]")

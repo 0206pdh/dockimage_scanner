@@ -65,10 +65,14 @@ class LayerAnalysis:
         """Layers with non-zero size (actual filesystem changes)."""
         return [l for l in self.layers if l.size_bytes > 0]
 
+    @property
+    def history_total_bytes(self) -> int:
+        """Sum of all layer delta sizes from docker history (uncompressed)."""
+        return sum(l.size_bytes for l in self.layers)
+
     def size_pct(self, layer: LayerEntry) -> float:
-        """Percentage of total image size this layer contributes."""
-        # Use sum of history sizes as denominator for consistency
-        total = sum(l.size_bytes for l in self.layers)
+        """Percentage of uncompressed layer content this layer contributes."""
+        total = self.history_total_bytes
         if total == 0:
             return 0.0
         return layer.size_bytes / total * 100
