@@ -188,6 +188,8 @@ class ValidationResult:
     optimized_size_mb: float
     original_layers: int
     optimized_layers: int
+    original_build_time_s: float = 0.0
+    optimized_build_time_s: float = 0.0
 
     @property
     def delta_mb(self) -> float:

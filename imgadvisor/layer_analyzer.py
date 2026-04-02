@@ -15,6 +15,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass, field
 
@@ -51,6 +52,7 @@ class LayerAnalysis:
     dockerfile_path: str
     total_bytes: int
     layers: list[LayerEntry] = field(default_factory=list)
+    build_time_s: float = 0.0
 
     @property
     def total_mb(self) -> float:
@@ -96,7 +98,9 @@ def analyze(dockerfile_path: str) -> LayerAnalysis:
     """
     tag = f"imgadvisor-layers-{uuid.uuid4().hex[:8]}"
     try:
+        t0 = time.monotonic()
         _build(dockerfile_path, tag)
+        build_time_s = time.monotonic() - t0
         total_bytes = _inspect_total_size(tag)
         layers = _parse_history(tag)
         return LayerAnalysis(
@@ -104,6 +108,7 @@ def analyze(dockerfile_path: str) -> LayerAnalysis:
             dockerfile_path=dockerfile_path,
             total_bytes=total_bytes,
             layers=layers,
+            build_time_s=build_time_s,
         )
     finally:
         _cleanup(tag)

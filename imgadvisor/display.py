@@ -160,6 +160,7 @@ def print_validation(result: ValidationResult) -> None:
 
     size_delta  = result.original_size_mb - result.optimized_size_mb
     layer_delta = result.original_layers  - result.optimized_layers
+    time_delta  = result.original_build_time_s - result.optimized_build_time_s
 
     tbl.add_row(
         "image size",
@@ -173,6 +174,13 @@ def print_validation(result: ValidationResult) -> None:
         str(result.optimized_layers),
         (f"[bold green]-{layer_delta}[/bold green]" if layer_delta > 0
          else f"[yellow]{layer_delta:+}[/yellow]"),
+    )
+    tbl.add_row(
+        "build time",
+        f"{result.original_build_time_s:.1f}s",
+        f"{result.optimized_build_time_s:.1f}s",
+        (f"[bold green]-{time_delta:.1f}s[/bold green]" if time_delta > 0
+         else f"[yellow]{time_delta:+.1f}s[/yellow]"),
     )
     console.print(tbl)
     console.print()
@@ -301,7 +309,8 @@ def print_layers(analysis: "LayerAnalysis") -> None:  # type: ignore[name-define
     console.print(
         f"  [dim]image size[/dim] [bold]{analysis.total_mb:.1f} MB[/bold]  "
         f"[dim]layers[/dim] {analysis.layer_count}  "
-        f"[dim]uncompressed layer content[/dim] {history_mb:.1f} MB"
+        f"[dim]uncompressed layer content[/dim] {history_mb:.1f} MB  "
+        f"[dim]build[/dim] [bold]{analysis.build_time_s:.1f}s[/bold]"
     )
     # Note: docker history sizes are uncompressed layer deltas and may sum to more
     # than the final image size due to union filesystem deduplication/whiteouts.

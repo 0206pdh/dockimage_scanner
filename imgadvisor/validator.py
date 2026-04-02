@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 import uuid
 
 from imgadvisor.models import ValidationResult
@@ -37,8 +38,13 @@ def validate(original_path: str, optimized_path: str) -> ValidationResult:
     opt_tag = f"imgadvisor-opt-{uuid.uuid4().hex[:8]}"
 
     try:
+        t0 = time.monotonic()
         _build(original_path, orig_tag)
+        orig_build_time_s = time.monotonic() - t0
+
+        t0 = time.monotonic()
         _build(optimized_path, opt_tag)
+        opt_build_time_s = time.monotonic() - t0
 
         orig = _inspect(orig_tag)
         opt = _inspect(opt_tag)
@@ -48,6 +54,8 @@ def validate(original_path: str, optimized_path: str) -> ValidationResult:
             optimized_size_mb=opt["size"] / (1024 * 1024),
             original_layers=orig["layers"],
             optimized_layers=opt["layers"],
+            original_build_time_s=orig_build_time_s,
+            optimized_build_time_s=opt_build_time_s,
         )
     finally:
         # 성공/실패 모두 임시 이미지 삭제
