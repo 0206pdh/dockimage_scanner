@@ -102,12 +102,12 @@ def cmd_recommend(
     ir = parse(str(dockerfile))
     findings = analyze(ir)
 
-    # 분석 결과를 먼저 출력해 사용자가 무엇이 수정됐는지 확인할 수 있게 함
-    display.print_analysis(ir, findings)
-
     if not findings:
-        typer.echo("Dockerfile is already optimized. No recommendations.")
+        display.print_analysis(ir, findings)
         return
+
+    # Compact one-line summary instead of the full analysis output
+    display.print_recommend_summary(ir, findings)
 
     # Finding을 바탕으로 최적화 Dockerfile 생성
     optimized = recommender.recommend(ir, findings)

@@ -239,9 +239,44 @@ _RULES: list[tuple[str, list[dict]]] = [
     ]),
 ]
 
+# Alpine rewrites are only safe when apt-installed packages can be translated
+# with high confidence. Otherwise the rule should prefer a Debian/slim variant
+# and avoid generating a Dockerfile that fails during validate/build.
+_APT_TO_APK_PACKAGE_MAP: dict[str, str] = {
+    "build-essential": "build-base",
+    "libpq-dev": "postgresql-dev",
+    "libssl-dev": "openssl-dev",
+    "pkg-config": "pkgconf",
+}
+
+_APK_PASSTHROUGH_PACKAGES: set[str] = {
+    "bash",
+    "ca-certificates",
+    "coreutils",
+    "curl",
+    "gcc",
+    "g++",
+    "git",
+    "grep",
+    "libffi-dev",
+    "make",
+    "musl-dev",
+    "openssl",
+    "python3-dev",
+    "sed",
+    "tar",
+    "unzip",
+    "zip",
+}
+
 def _is_no_shell_image(image_template: str) -> bool:
     """Return True if the image requires no shell (distroless or scratch)."""
     return "distroless" in image_template or image_template.startswith("scratch")
+
+
+def _is_alpine_image(image_template: str) -> bool:
+    """Return True if the image template targets Alpine Linux."""
+    return "-alpine" in image_template or image_template.startswith("alpine:")
 
 
 def _filter_recs_by_shell(recs: list[dict], shell_status: str) -> list[dict]:
@@ -256,6 +291,66 @@ def _filter_recs_by_shell(recs: list[dict], shell_status: str) -> list[dict]:
         return recs
     filtered = [r for r in recs if not _is_no_shell_image(r["image"])]
     return filtered if filtered else recs  # fallback if every candidate was excluded
+
+
+def _extract_apt_packages(run_text: str) -> Optional[list[str]]:
+    """
+    Extract package names from a straightforward apt install command.
+
+    Supported shape:
+      apt-get update && apt-get install -y <packages...>
+
+    More complex shell logic deliberately returns None so the caller can avoid
+    unsafe Alpine rewrites.
+    """
+    normalized = re.sub(r"\s+", " ", run_text.strip())
+    match = re.search(r"(?:apt-get|apt)\s+install\s+(.+)", normalized, re.IGNORECASE)
+    if not match:
+        return None
+
+    tail = re.split(r"\s*(?:&&|;|\|\|)\s*", match.group(1), maxsplit=1)[0].strip()
+    if not tail:
+        return None
+
+    packages = [token for token in tail.split() if not token.startswith("-")]
+    return packages or None
+
+
+def _can_translate_apt_packages_to_alpine(packages: list[str]) -> bool:
+    """Return True if every package has a confident Alpine equivalent."""
+    for package in packages:
+        if package in _APT_TO_APK_PACKAGE_MAP:
+            continue
+        if package in _APK_PASSTHROUGH_PACKAGES:
+            continue
+        return False
+    return True
+
+
+def _filter_recs_by_pkg_manager(stage: Stage, recs: list[dict]) -> tuple[list[dict], str]:
+    """
+    Remove Alpine candidates when the final stage uses apt packages that cannot
+    be translated safely.
+    """
+    apt_packages: list[str] = []
+    for instr in stage.run_instructions:
+        if not re.search(r"\b(?:apt-get|apt)\b", instr.arguments, re.IGNORECASE):
+            continue
+
+        packages = _extract_apt_packages(instr.arguments)
+        if not packages:
+            filtered = [r for r in recs if not _is_alpine_image(r["image"])]
+            return (filtered if filtered else recs), "complex apt command detected"
+        apt_packages.extend(packages)
+
+    if not apt_packages:
+        return recs, ""
+
+    if _can_translate_apt_packages_to_alpine(apt_packages):
+        return recs, "apt packages can be translated to alpine"
+
+    filtered = [r for r in recs if not _is_alpine_image(r["image"])]
+    return (filtered if filtered else recs), "apt packages are not safely translatable to alpine"
 
 
 def _detect_shell_requirement(stage: Stage) -> tuple[str, str]:
@@ -341,6 +436,7 @@ def check(ir: DockerfileIR) -> list[Finding]:
         # candidates accordingly before picking the one with maximum savings.
         shell_status, shell_signal = _detect_shell_requirement(final)
         filtered_recs = _filter_recs_by_shell(recs, shell_status)
+        filtered_recs, pkg_signal = _filter_recs_by_pkg_manager(final, filtered_recs)
 
         best = max(filtered_recs, key=lambda r: r["max"])
         best_image = best["image"].replace("{v}", version)
@@ -361,6 +457,8 @@ def check(ir: DockerfileIR) -> list[Finding]:
         signal_str = ""
         if shell_status != "unknown":
             signal_str = f"\n  signal: {shell_signal}"
+        if pkg_signal:
+            signal_str += f"\n  package-manager: {pkg_signal}"
 
         recommendation = f"→ {best_image}{note_str}{signal_str}{alt_str}"
 

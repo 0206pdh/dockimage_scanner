@@ -118,7 +118,7 @@ _TEMPLATES: dict[str, str] = {
         "# ── builder stage ──────────────────────────────\n"
         "FROM <build-image> AS builder\n"
         "WORKDIR /app\n"
-        "# ... 빌드 수행 ...\n"
+        "# ... build steps ...\n"
         "\n"
         "# ── runtime stage ───────────────────────────────\n"
         "FROM <runtime-image-slim>\n"

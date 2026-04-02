@@ -122,6 +122,27 @@ def _print_finding(f: Finding) -> None:
     console.print()
 
 
+def print_recommend_summary(ir: DockerfileIR, findings: list[Finding]) -> None:
+    """One-line summary shown before the optimized Dockerfile in recommend mode."""
+    fail_n = sum(1 for f in findings if f.severity == Severity.HIGH)
+    warn_n = sum(1 for f in findings if f.severity == Severity.MEDIUM)
+    total_min = sum(f.saving_min_mb for f in findings)
+    total_max = sum(f.saving_max_mb for f in findings)
+
+    parts: list[str] = []
+    if fail_n:
+        parts.append(f"[bold red]{fail_n} FAIL[/bold red]")
+    if warn_n:
+        parts.append(f"[bold yellow]{warn_n} WARN[/bold yellow]")
+
+    console.print()
+    console.print(
+        f"  [bold]imgadvisor[/bold]  [dim]{ir.path}[/dim]  "
+        + "  ".join(parts)
+        + f"  [dim]|[/dim]  est. [green]{total_min:,} ~ {total_max:,} MB[/green]"
+    )
+
+
 def print_recommended_dockerfile(content: str) -> None:
     console.print()
     console.print(Rule("optimized dockerfile", style="dim"))
