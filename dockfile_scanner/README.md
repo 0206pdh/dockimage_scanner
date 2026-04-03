@@ -1,58 +1,80 @@
 # imgadvisor
 
-Dockerfile pre-build static analyzer and image optimization advisor.
+Dockerfile 사전 정적 분석 및 이미지 최적화 도구입니다.
 
-`imgadvisor` reads a Dockerfile before build time, flags image bloat and risky runtime defaults, and can generate an optimized Dockerfile. The current optimization path is deepest for Python images: it can rebuild single-stage Python Dockerfiles into concrete multi-stage output instead of only printing a generic template.
+`imgadvisor`는 Docker 이미지를 실제로 빌드하기 전에 Dockerfile을 읽고, 이미지가 왜 커질지, 어떤 부분이 위험한지, 어떤 식으로 줄일 수 있는지를 분석합니다. 현재 구현은 특히 Python Dockerfile 최적화에 가장 깊게 맞춰져 있으며, 단순한 예시 템플릿이 아니라 실제 multi-stage Dockerfile 본문을 생성할 수 있습니다.
 
-## Install
+## 현재 저장소 구조
+
+이 저장소의 Git 루트는 `0206pdh/dockimage_scanner` 최상단입니다.  
+현재 `imgadvisor` 패키지와 문서는 그 아래 `dockfile_scanner/` 경로에 있습니다.
+
+즉 이 문서는 다음 경로에 해당합니다.
+
+- `dockfile_scanner/README.md`
+
+설치나 개발 작업을 할 때도 이 점을 기준으로 보는 것이 맞습니다.
+
+## 설치
+
+현재 구조상 GitHub tarball만 바로 설치하면 상위 루트의 다른 패키지 설정을 타게 될 수 있습니다. 그래서 현재는 `subdirectory`를 명시하는 설치가 가장 정확합니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/0206pdh/dockimage_scanner/main/install.sh | bash
-source ~/.bashrc
+python -m pip install --no-cache-dir --force-reinstall \
+  "git+https://github.com/0206pdh/dockimage_scanner.git@main#subdirectory=dockfile_scanner"
 ```
 
-The installer creates `~/.imgadvisor` and exposes `imgadvisor` through `~/.local/bin`.
+특정 버전 태그를 설치하려면:
 
-Requirements:
-- Python 3.11+
-- Docker daemon for `layers` and `validate`
-- Trivy for `scan`
+```bash
+python -m pip install --no-cache-dir --force-reinstall \
+  "git+https://github.com/0206pdh/dockimage_scanner.git@v0.3.0#subdirectory=dockfile_scanner"
+```
 
-## Commands
+요구 사항:
 
-| Command | Docker required | Purpose |
+- Python 3.11 이상
+- `layers`, `validate` 명령을 쓸 경우 Docker daemon
+- `scan` 명령을 쓸 경우 Trivy
+
+## 명령어
+
+| 명령어 | Docker 필요 | 설명 |
 |---|---|---|
-| `analyze` | No | Static analysis of Dockerfile issues |
-| `recommend` | No | Generate an optimized Dockerfile |
-| `layers` | Yes | Build image and inspect layer sizes |
-| `validate` | Yes | Build original vs optimized Dockerfiles and compare results |
-| `scan` | No | Run Trivy pre-build config and filesystem scans |
+| `analyze` | 아니오 | Dockerfile 문제를 정적 분석 |
+| `recommend` | 아니오 | 최적화된 Dockerfile 생성 |
+| `layers` | 예 | 실제 이미지 빌드 후 레이어 크기 분석 |
+| `validate` | 예 | 원본/최적화 Dockerfile 실제 빌드 비교 |
+| `scan` | 아니오 | Trivy pre-build 설정/취약점 검사 |
 
-## Python-Focused Optimization
+## Python 중심 최적화
 
-The current implementation is intentionally Python-first.
+현재 구현은 의도적으로 Python 쪽을 가장 깊게 다룹니다.
 
-For Python Dockerfiles, `imgadvisor` can:
-- detect single-stage runtime images that still contain build dependencies
-- generate a real builder/runtime split instead of appending a comment-only template
-- create and copy a dedicated virtualenv from builder to runtime
-- prefer `python:*‑slim` for runtime output
-- normalize `apt` and `pip` commands with cleanup flags
-- use manifest-first dependency layers when `requirements*.txt`, `constraints*.txt`, `pyproject.toml`, or `poetry.lock` exist
-- inject container-safe Python env defaults
-- rewrite some runtime entrypoints conservatively
+Python Dockerfile에 대해 현재 가능한 것:
 
-Python runtime defaults currently handled:
+- single-stage Python 이미지를 multi-stage로 전환 판단
+- 실제 instruction 흐름을 기반으로 builder/runtime stage 재구성
+- `/opt/venv` 기반 의존성 분리
+- runtime stage를 보수적으로 `python:*‑slim`으로 축소
+- `apt`/`pip` 명령 정규화
+- `requirements*.txt`, `constraints*.txt`, `pyproject.toml`, `poetry.lock` 기반 manifest-first 전략
+- Python runtime 기본 `ENV` 보강
+- 일부 엔트리포인트 자동 보정
+
+현재 반영되는 Python runtime 기본값:
+
 - `PYTHONUNBUFFERED=1`
 - `PYTHONDONTWRITEBYTECODE=1`
 - `PIP_NO_CACHE_DIR=1`
 - `PIP_DISABLE_PIP_VERSION_CHECK=1`
 
-Python runtime command handling:
-- `flask run` is flagged as a development server and, when inference is safe enough, the generated multi-stage Dockerfile switches to `gunicorn`
-- `uvicorn` without `--workers` is flagged and the generated multi-stage Dockerfile adds `--workers 2`
+현재 반영되는 Python runtime command 보정:
 
-## Typical Workflow
+- `flask run` 감지 시, 안전하게 추론 가능하면 `gunicorn`으로 전환
+- `uvicorn`에 `--workers`가 없으면 `--workers 2` 추가
+
+## 기본 사용 흐름
 
 ```bash
 imgadvisor analyze -f Dockerfile
@@ -60,75 +82,79 @@ imgadvisor recommend -f Dockerfile -o optimized.Dockerfile
 imgadvisor validate -f Dockerfile --optimized optimized.Dockerfile
 ```
 
-If you want actual layer-level evidence before rewriting:
+레이어 단위 근거를 먼저 보고 싶다면:
 
 ```bash
 imgadvisor layers -f Dockerfile
 ```
 
-If you want pre-build security checks:
+빌드 전 보안/설정 검사까지 하고 싶다면:
 
 ```bash
 imgadvisor scan -f Dockerfile
 ```
 
-## Examples
+## 사용 예시
 
-Analyze a Dockerfile:
+정적 분석:
 
 ```bash
 imgadvisor analyze -f Dockerfile
 ```
 
-Generate an optimized Dockerfile:
+최적화 Dockerfile 생성:
 
 ```bash
 imgadvisor recommend -f Dockerfile -o optimized.Dockerfile
 ```
 
-Validate actual size reduction:
+실제 크기 감소 검증:
 
 ```bash
 imgadvisor validate -f Dockerfile --optimized optimized.Dockerfile
 ```
 
-Run Trivy pre-build checks:
+Trivy pre-build 검사:
 
 ```bash
 imgadvisor scan -f Dockerfile --severity HIGH,CRITICAL
 ```
 
-## Main Rules
+## 주요 rule
 
 ### Base image
 
-Flags oversized base images and recommends smaller compatible options. For Python, the current generated multi-stage path prefers a conservative slim runtime instead of aggressive runtime swaps that often break package-manager compatibility.
+과하게 무거운 base image를 감지하고, 더 작은 대안을 추천합니다.  
+다만 현재 Python multi-stage 생성 경로에서는 Alpine 같은 공격적 전환보다 `slim` 계열을 더 보수적으로 사용합니다.
 
 ### Build tools in final stage
 
-Flags compilers and development packages left in the final runtime image.
+final stage에 남아 있는 컴파일러, 개발 헤더, 빌드 도구를 감지합니다.
 
 ### Cache cleanup
 
-Flags package manager installs that leave cache behind, such as:
-- `apt-get install` without apt-list cleanup
-- `pip install` without `--no-cache-dir`
+패키지 매니저 설치 후 캐시를 남기는 패턴을 감지합니다.
+
+예:
+
+- `apt-get install` 후 apt lists 미정리
+- `pip install` 에 `--no-cache-dir` 누락
 
 ### Python runtime defaults
 
-Flags missing or conflicting Python runtime env values and development-oriented runtime commands.
+Python 컨테이너에서 자주 빠지는 기본 `ENV`와 개발용 엔트리포인트 패턴을 감지합니다.
 
 ### Broad copy scope
 
-Flags `COPY . .`-style instructions that bring the whole build context into the image, especially when `.dockerignore` is missing.
+`.dockerignore` 없이 `COPY . .` 같은 패턴이 있는지 검사합니다.
 
 ### Single-stage Python build
 
-Flags Python Dockerfiles that should become multi-stage and generates a concrete builder/runtime Dockerfile from the original instruction stream.
+Python Dockerfile을 실제 multi-stage로 바꾸는 것이 유의미한지 판정하고, 조건이 맞으면 구체적인 builder/runtime Dockerfile 본문을 생성합니다.
 
-## What `recommend` Does For Python
+## Python에서 `recommend`가 하는 일
 
-When the final stage is Python and the Dockerfile has meaningful optimization signals, `recommend` can generate output like:
+Python final stage에 최적화 신호가 있으면, `recommend`는 다음과 비슷한 결과를 만들 수 있습니다.
 
 ```dockerfile
 # -- builder stage --
@@ -151,42 +177,52 @@ COPY --from=builder /app /app
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
 ```
 
-This is not a fixed template pasted blindly. The generator reads the parsed Dockerfile, keeps the instruction order where it can, and changes the runtime stage only where there is a concrete optimization reason.
+중요한 점은, 이 결과가 고정 예시를 붙이는 방식이 아니라는 점입니다.  
+파싱된 Dockerfile instruction을 읽고, 가능한 범위에서 원래 순서를 보존하면서 builder/runtime를 다시 조립합니다.
 
-## Trivy Pre-Build Scan
+## Trivy pre-build 검사
 
-`scan` combines:
-- `trivy config` for Dockerfile misconfiguration checks
-- `trivy fs` for dependency vulnerability checks from the build context
+`scan`은 두 가지를 함께 수행합니다.
 
-Example:
+- `trivy config`: Dockerfile 설정 문제 검사
+- `trivy fs`: build context의 dependency 취약점 검사
+
+예:
 
 ```bash
 imgadvisor scan -f Dockerfile --ignore-unfixed
 ```
 
-## Project Layout
+## 프로젝트 구조
 
 ```text
-imgadvisor/
-├── main.py
-├── parser.py
-├── analyzer.py
-├── recommender.py
-├── validator.py
-├── layer_analyzer.py
-├── trivy_scanner.py
-├── display.py
-├── models.py
-└── rules/
-    ├── base_image.py
-    ├── build_tools.py
-    ├── cache_cleanup.py
-    ├── copy_scope.py
-    ├── multi_stage.py
-    └── python_runtime.py
+dockfile_scanner/
+├── README.md
+├── comparison.md
+├── pyproject.toml
+├── imgadvisor/
+│   ├── main.py
+│   ├── parser.py
+│   ├── analyzer.py
+│   ├── recommender.py
+│   ├── validator.py
+│   ├── layer_analyzer.py
+│   ├── trivy_scanner.py
+│   ├── display.py
+│   ├── models.py
+│   └── rules/
+│       ├── base_image.py
+│       ├── build_tools.py
+│       ├── cache_cleanup.py
+│       ├── copy_scope.py
+│       ├── multi_stage.py
+│       └── python_runtime.py
+└── test/
+    ├── Dockerfile.bloated
+    └── app.py
 ```
 
-## Current Scope
+## 현재 범위
 
-The deepest rewrite logic is Python-specific by design. Other language ecosystems may still be analyzed by broader rules, but the concrete multi-stage reconstruction path is currently focused on Python.
+가장 깊은 재작성 로직은 의도적으로 Python에 집중되어 있습니다.  
+다른 언어도 일부 범용 rule로 분석은 되지만, 실제 Dockerfile 본문을 재구성하는 multi-stage 최적화 경로는 현재 Python 중심입니다.
