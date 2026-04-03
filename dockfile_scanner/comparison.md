@@ -1,204 +1,203 @@
-# Python 이미지 최적화 비교
+# Python 테스트 Dockerfile 비교
 
-이 문서는 의도적으로 비대하게 만든 Python Dockerfile과 `imgadvisor`가 생성한 최적화 Dockerfile을 비교합니다.
+이 문서는 `test/` 아래에서 실제로 최적화한 세 개의 Python Dockerfile을 기준으로, 원본과 최적화 결과를 비교 정리한 문서입니다.
 
-## 원본 Dockerfile
+대상 파일:
+
+- `test/Dockerfile.pre1` / `test/Dockerfile.pre1.optimized`
+- `test/Dockerfile.pre2` / `test/Dockerfile.pre2.optimized`
+- `test/Dockerfile.pre3` / `test/Dockerfile.pre3.optimized`
+
+## 비교 요약
+
+| 케이스 | 앱 성격 | 원본 엔트리포인트 | 최적화 후 엔트리포인트 | 핵심 변화 |
+|---|---|---|---|---|
+| `pre1` | Flask + `pip install` inline | `flask run` | `gunicorn -b 0.0.0.0:5000 app:app` | multi-stage, slim runtime, apt/pip 정리, 개발 서버 제거 |
+| `pre2` | FastAPI + Uvicorn | `uvicorn main:app` | 유지 | multi-stage, slim runtime, apt/pip 정리, worker 자동 고정은 하지 않음 |
+| `pre3` | Flask + `requirements.txt` | `flask run` | 유지 | manifest-first install, multi-stage, slim runtime, apt/pip 정리 |
+
+## 공통적으로 적용된 최적화
+
+세 케이스 모두 아래 원칙이 공통으로 반영됩니다.
+
+- 단일 스테이지에서 builder / runtime multi-stage 구조로 분리
+- runtime 이미지를 `python:3.11-slim` 계열로 축소
+- `/opt/venv` 가상환경을 만들어 런타임 의존성만 복사
+- `apt-get install`에 `--no-install-recommends` 추가
+- 같은 `RUN`에서 `rm -rf /var/lib/apt/lists/*` 수행
+- `pip install`에 `--no-cache-dir` 적용
+- Python 컨테이너 기본 `ENV` 보강
+  - `PYTHONUNBUFFERED=1`
+  - `PYTHONDONTWRITEBYTECODE=1`
+  - `PIP_NO_CACHE_DIR=1`
+  - `PIP_DISABLE_PIP_VERSION_CHECK=1`
+
+## 케이스 1: Flask 개발 서버를 Gunicorn으로 교체
+
+대상:
+
+- 원본: `test/Dockerfile.pre1`
+- 결과: `test/Dockerfile.pre1.optimized`
+
+원본 특징:
+
+- `python:3.11` 단일 스테이지
+- `gcc`, `g++`, `build-essential`이 최종 이미지에 남음
+- `COPY . .`
+- `pip install flask gunicorn requests pandas`
+- 엔트리포인트가 `flask run`
+
+최적화 결과 핵심:
+
+- builder stage에서 빌드 도구와 의존성 설치
+- runtime stage에서는 `/opt/venv`와 `/app`만 복사
+- `python:3.11-slim` 사용
+- Flask 앱 소스를 실제로 읽어 `app.py` 안의 `app = Flask(__name__)`를 확인한 뒤, 엔트리포인트를 `gunicorn`으로 교체
+
+최적화 결과의 핵심 부분:
 
 ```dockerfile
-FROM python:3.11
-
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    make \
-    cmake \
-    build-essential \
-    libpq-dev \
-    libssl-dev \
-    libffi-dev \
-    wget \
-    curl \
-    git \
-    vim
-
-WORKDIR /app
-
-COPY . .
-
-RUN pip install flask sqlalchemy psycopg2-binary \
-    requests numpy pandas scikit-learn \
-    celery redis gunicorn
-
-RUN wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz \
-    && tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz \
-    && rm dockerize-linux-amd64-v0.6.1.tar.gz
-
-RUN rm -rf /var/lib/apt/lists/*
-
-ENV FLASK_APP=app.py
-ENV FLASK_ENV=production
-ENV PYTHONDONTWRITEBYTECODE=1
-
-EXPOSE 5000
-CMD flask run --host=0.0.0.0 --port=5000
-```
-
-## 최적화 Dockerfile
-
-```dockerfile
-# -- builder stage --
-FROM python:3.11 AS builder
-WORKDIR /app
-ENV VIRTUAL_ENV=/opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-RUN python -m venv $VIRTUAL_ENV
-ENV FLASK_APP=app.py
-ENV FLASK_ENV=production
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PIP_NO_CACHE_DIR=1
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ make cmake build-essential libpq-dev libssl-dev libffi-dev wget curl git vim \
-    && rm -rf /var/lib/apt/lists/*
-COPY . .
-RUN pip install --no-cache-dir flask sqlalchemy psycopg2-binary requests numpy pandas scikit-learn celery redis gunicorn
-RUN wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz && tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz && rm dockerize-linux-amd64-v0.6.1.tar.gz
-RUN rm -rf /var/lib/apt/lists/*
-
 # -- runtime stage --
 FROM python:3.11-slim
 WORKDIR /app
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-ENV FLASK_APP=app.py
-ENV FLASK_ENV=production
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PIP_NO_CACHE_DIR=1
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 COPY --from=builder /opt/venv /opt/venv
-COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app /app
 EXPOSE 5000
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", "app:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app"]
 ```
 
-## 무엇이 달라졌는가
+포인트:
 
-### 1. 단일 스테이지를 multi-stage로 분리
+- `-w 2` 같은 고정 worker 값은 넣지 않음
+- `gunicorn`이 실제 설치되는 경우에만 자동 교체
 
-원본은 빌드 도구 설치, Python 의존성 설치, 런타임 구성까지 모두 한 이미지에서 처리합니다.
+## 케이스 2: FastAPI / Uvicorn은 유지하고 런타임만 경량화
 
-최적화본은 다음처럼 역할을 분리합니다.
+대상:
 
-- `builder`: 빌드 도구 설치와 의존성 구성
-- `runtime`: 실행에 필요한 결과물만 복사
+- 원본: `test/Dockerfile.pre2`
+- 결과: `test/Dockerfile.pre2.optimized`
 
-이 변화로 런타임 이미지에 컴파일러와 개발 패키지가 남지 않습니다.
+원본 특징:
 
-### 2. 런타임 base image 축소
+- `fastapi`, `uvicorn`, `sqlalchemy` inline 설치
+- `uvicorn` 실행
+- 빌드 도구와 캐시 정리가 부족
 
-- 원본: `python:3.11`
-- 최적화본: `python:3.11-slim`
+최적화 결과 핵심:
 
-runtime 시작점 자체를 더 작게 가져가면서 Alpine 전환보다 호환성 리스크를 줄입니다.
+- builder / runtime 분리
+- `python:3.11-slim` runtime 사용
+- `pip install --no-cache-dir`
+- `apt` cache 정리
+- `uvicorn` 엔트리포인트는 유지
 
-### 3. Python 의존성을 가상환경으로 분리
-
-최적화본은 `/opt/venv`에 전용 가상환경을 만들고, 런타임에는 그 결과만 복사합니다.
-
-이렇게 하면 builder의 전체 Python 환경을 통째로 가져오지 않아도 됩니다.
-
-### 4. `apt` 설치 명령 정리
-
-원본:
+최적화 결과의 핵심 부분:
 
 ```dockerfile
-RUN apt-get update && apt-get install -y ...
+# -- runtime stage --
+FROM python:3.11-slim
+WORKDIR /app
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /app /app
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-최적화본:
+포인트:
+
+- `uvicorn`에 worker 수를 자동으로 넣지 않음
+- `PYTHON_ASGI_WORKERS_NOT_SET` 경고는 주되, CPU/메모리/배포 환경을 모르는 상태에서 자동 고정하지 않음
+
+## 케이스 3: requirements 기반 Flask 앱
+
+대상:
+
+- 원본: `test/Dockerfile.pre3`
+- 결과: `test/Dockerfile.pre3.optimized`
+
+원본 특징:
+
+- `requirements.txt`를 먼저 복사하고 `pip install -r requirements.txt`
+- 그 뒤 `COPY . .`
+- 엔트리포인트는 `flask run`
+
+최적화 결과 핵심:
+
+- `requirements.txt`를 먼저 복사하는 manifest-first 전략 유지
+- builder에서 `pip install --no-cache-dir -r requirements.txt`
+- runtime을 slim으로 축소
+- Flask 엔트리포인트는 그대로 유지
+
+최적화 결과의 핵심 부분:
 
 ```dockerfile
-RUN apt-get update && apt-get install -y --no-install-recommends ... \
-    && rm -rf /var/lib/apt/lists/*
-```
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
 
-효과:
-
-- 불필요한 추천 패키지 감소
-- apt index cache 제거
-
-### 5. `pip install` 정리
-
-원본은 캐시를 남길 수 있는 일반 `pip install`을 사용합니다.
-
-최적화본은:
-
-- `pip install --no-cache-dir ...`
-- `PIP_NO_CACHE_DIR=1`
-- `PIP_DISABLE_PIP_VERSION_CHECK=1`
-
-를 함께 적용해 불필요한 캐시와 추가 동작을 줄입니다.
-
-### 6. Python 런타임 `ENV` 보강
-
-추가되거나 보강되는 항목:
-
-- `PYTHONUNBUFFERED=1`
-- `PYTHONDONTWRITEBYTECODE=1`
-- `PIP_NO_CACHE_DIR=1`
-- `PIP_DISABLE_PIP_VERSION_CHECK=1`
-
-효과:
-
-- 로그가 버퍼링 없이 바로 출력됨
-- `.pyc` 생성 감소
-- pip 캐시 감소
-
-### 7. 개발 서버를 런타임 서버로 교체
-
-원본:
-
-```dockerfile
+# -- runtime stage --
+FROM python:3.11-slim
+...
 CMD flask run --host=0.0.0.0 --port=5000
 ```
 
-최적화본:
+왜 `gunicorn`으로 안 바뀌는가:
 
-```dockerfile
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", "app:app"]
-```
+- 이 케이스는 실제 최적화 결과 기준으로 엔트리포인트가 유지됨
+- 현재 자동 치환은 앱 소스 추론과 의존성 확인이 모두 맞을 때만 동작
+- 따라서 `pre3`는 “엔트리포인트 자동 치환보다 Dockerfile 구조 최적화가 우선 적용된 예시”로 보는 것이 맞음
 
-`flask run`은 개발용 서버이므로, 실제 컨테이너 런타임에서는 `gunicorn` 같은 WSGI 서버가 더 적절합니다.
+## 케이스별 차이
 
-## 기대 효과
+### `pre1`
 
-최적화 후 일반적으로 기대할 수 있는 변화는 다음과 같습니다.
+- inline `pip install`
+- Flask 개발 서버를 운영형 `gunicorn`으로 교체
+- broad COPY 포함
 
-- 런타임 이미지 크기 감소
-- 컴파일러와 개발용 라이브러리 제거
-- 패키지 관리자 캐시 감소
-- 더 적절한 Python 런타임 기본값 적용
-- 운영용 서버 사용으로 실행 방식 개선
+### `pre2`
 
-## 검증 방법
+- FastAPI / Uvicorn 케이스
+- 엔트리포인트는 유지
+- worker 수는 경고만 하고 자동 수정하지 않음
+
+### `pre3`
+
+- `requirements.txt` 기반 설치
+- dependency layer 캐시 전략이 반영됨
+- Flask지만 엔트리포인트는 유지된 실제 결과를 기록
+
+## 테스트 방법
+
+예시:
 
 ```bash
-imgadvisor recommend -f Dockerfile -o optimized.Dockerfile
-imgadvisor validate -f Dockerfile --optimized optimized.Dockerfile
+imgadvisor analyze -f test/Dockerfile.pre1
+imgadvisor recommend -f test/Dockerfile.pre1 -o test/Dockerfile.pre1.optimized
+imgadvisor validate -f test/Dockerfile.pre1 --optimized test/Dockerfile.pre1.optimized
 ```
 
-직접 빌드와 push까지 비교하려면:
+직접 빌드 비교:
 
 ```bash
-docker build -f Dockerfile -t 0206pdh/imgadvisor-test:original .
-docker build -f optimized.Dockerfile -t 0206pdh/imgadvisor-test:optimized .
-
-docker push 0206pdh/imgadvisor-test:original
-docker push 0206pdh/imgadvisor-test:optimized
+docker build -f test/Dockerfile.pre1 -t pre1-original test
+docker build -f test/Dockerfile.pre1.optimized -t pre1-optimized test
 ```
 
-## 참고
+다른 케이스도 `pre2`, `pre3`로 같은 방식으로 실행하면 됩니다.
 
-이 문서는 최상단 저장소 루트가 아니라 `dockfile_scanner/` 하위 프로젝트 기준 문서입니다.
+## 정리
+
+현재 `imgadvisor`의 Python 최적화는 다음 방향으로 정리됩니다.
+
+- 구조 최적화: 자동
+- 캐시/기본 ENV 정리: 자동
+- base image 축소: 자동
+- 엔트리포인트 변경: 보수적 자동화
+
+즉, 이미지 크기와 런타임 구성 최적화는 적극적으로 수행하되, worker 수나 서버 설정처럼 운영 환경 의존성이 큰 값은 자동으로 고정하지 않는 방향입니다.
