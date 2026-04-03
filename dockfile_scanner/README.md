@@ -42,7 +42,7 @@ python -m pip install --no-cache-dir --force-reinstall \
 
 ```bash
 python -m pip install --no-cache-dir --force-reinstall \
-  "git+https://github.com/0206pdh/dockimage_scanner.git@v0.3.9#subdirectory=dockfile_scanner"
+  "git+https://github.com/0206pdh/dockimage_scanner.git@v0.3.10#subdirectory=dockfile_scanner"
 ```
 
 필수 조건:
@@ -85,6 +85,11 @@ python -m pip install --no-cache-dir --force-reinstall \
 
 - `flask run`은 가능할 때 `gunicorn`으로 교체
 - `uvicorn`에 `--workers`가 없으면 경고만 표시하고 자동 고정은 하지 않음
+
+실제 전후 비교와 성능/배포 테스트 방법은 아래 문서를 참고합니다.
+
+- [comparison.md](./comparison.md)
+- [benchmark.md](./benchmark.md)
 
 ## 빠른 사용 예시
 
@@ -156,10 +161,15 @@ ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /app /app
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
 중요한 점은 이 결과가 단순 템플릿 붙이기가 아니라는 점입니다. 실제 Dockerfile instruction을 읽고, 가능한 범위에서 원래 의도를 유지하면서 builder/runtime를 다시 조립합니다.
+
+주의:
+
+- 현재 구현은 `uvicorn`에 worker 수를 자동으로 넣지 않습니다.
+- 위 예시는 구조 설명용이며, 실제 생성 결과는 프로젝트 의존성과 엔트리포인트 추론 결과에 따라 달라집니다.
 
 ## Trivy pre-build 검사
 

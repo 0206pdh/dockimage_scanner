@@ -191,6 +191,10 @@ docker build -f test/Dockerfile.pre1.optimized -t pre1-optimized test
 
 다른 케이스도 `pre2`, `pre3`로 같은 방식으로 실행하면 됩니다.
 
+실제 배포 효율과 부하테스트까지 포함한 전체 검증 절차는 아래 문서를 참고합니다.
+
+- [benchmark.md](./benchmark.md)
+
 ## 정리
 
 현재 `imgadvisor`의 Python 최적화는 다음 방향으로 정리됩니다.

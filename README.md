@@ -25,7 +25,7 @@ python -m pip install --no-cache-dir --force-reinstall \
 
 ```bash
 python -m pip install --no-cache-dir --force-reinstall \
-  "git+https://github.com/0206pdh/dockimage_scanner.git@v0.3.9#subdirectory=dockfile_scanner"
+  "git+https://github.com/0206pdh/dockimage_scanner.git@v0.3.10#subdirectory=dockfile_scanner"
 ```
 
 ## 프로젝트 위치
@@ -35,3 +35,5 @@ python -m pip install --no-cache-dir --force-reinstall \
 - 패키지: [dockfile_scanner/imgadvisor](./dockfile_scanner/imgadvisor)
 - 설치 스크립트: [dockfile_scanner/install.sh](./dockfile_scanner/install.sh)
 - 테스트 Dockerfile: [dockfile_scanner/test](./dockfile_scanner/test)
+- 비교 문서: [dockfile_scanner/comparison.md](./dockfile_scanner/comparison.md)
+- 성능/배포 테스트 문서: [dockfile_scanner/benchmark.md](./dockfile_scanner/benchmark.md)
