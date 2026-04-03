@@ -33,3 +33,7 @@ htmlcov/
 
 # generated test artifacts
 tests/fixtures/Dockerfile.*_optimized
+
+# local notes / backups
+README.md.bak
+STUDY.md

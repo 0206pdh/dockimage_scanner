@@ -1,95 +1,103 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 REPO="0206pdh/dockimage_scanner"
+SUBDIR="dockfile_scanner"
 TOOL="imgadvisor"
-MIN_PYTHON="3.11"
+VENV_DIR="${HOME}/.imgadvisor"
+BIN_DIR="${HOME}/.local/bin"
+MIN_PYTHON_MINOR=11
 
-# ── 색상 ────────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
 info()  { echo -e "${GREEN}[imgadvisor]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[imgadvisor]${NC} $*"; }
-error() { echo -e "${RED}[imgadvisor] ERROR:${NC} $*" >&2; exit 1; }
+error() { echo -e "${RED}[imgadvisor] 오류:${NC} $*" >&2; exit 1; }
 
-# 설치 스크립트 자체는 raw `main` 브랜치에서 내려받더라도, 실제 패키지 설치는
-# 항상 최신 GitHub release tag를 기준으로 수행한다. 이렇게 해야 사용자가
-# 같은 curl 명령을 실행해도 개발 중인 main HEAD가 아니라 가장 최근 배포본을 받는다.
-fetch_latest_release_tag() {
-  "$PYTHON" - <<'PY'
-import json
-from urllib.request import Request, urlopen
-
-repo = "0206pdh/dockimage_scanner"
-url = f"https://api.github.com/repos/{repo}/releases/latest"
-request = Request(
-    url,
-    headers={
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "imgadvisor-install-script",
-    },
-)
-
-with urlopen(request, timeout=15) as response:
-    payload = json.load(response)
-
-tag = str(payload.get("tag_name") or "").strip()
-if not tag:
-    raise SystemExit("latest release tag not found")
-
-print(tag)
-PY
-}
-
-# ── Python 확인 ─────────────────────────────────────────────────────────────
 PYTHON=""
-for cmd in python3 python; do
-  if command -v "$cmd" &>/dev/null; then
-    ver=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-    major=${ver%%.*}; minor=${ver##*.}
-    if [ "$major" -ge 3 ] && [ "$minor" -ge 11 ]; then
+for cmd in python3.13 python3.12 python3.11 python3 python; do
+  if command -v "$cmd" >/dev/null 2>&1; then
+    ver=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null) || continue
+    major=${ver%%.*}
+    minor=${ver##*.}
+    if [ "$major" -eq 3 ] && [ "$minor" -ge "$MIN_PYTHON_MINOR" ]; then
       PYTHON="$cmd"
       break
     fi
   fi
 done
 
-[ -z "$PYTHON" ] && error "Python ${MIN_PYTHON}+ 이 필요합니다. https://python.org 에서 설치하세요."
-info "Python 확인: $($PYTHON --version)"
+[ -z "$PYTHON" ] && error "Python 3.${MIN_PYTHON_MINOR}+ 가 필요합니다."
+info "사용할 Python: $($PYTHON --version)"
 
-# ── pip 확인 ────────────────────────────────────────────────────────────────
-if ! "$PYTHON" -m pip --version &>/dev/null; then
-  error "pip 가 없습니다. 'python -m ensurepip --upgrade' 로 설치하세요."
+if ! command -v git >/dev/null 2>&1; then
+  error "git 이 필요합니다. 먼저 git 을 설치해 주세요."
 fi
 
-# ── 최신 release 조회 ──────────────────────────────────────────────────────
-LATEST_TAG=""
-if ! LATEST_TAG="$(fetch_latest_release_tag 2>/dev/null)"; then
-  error "최신 GitHub release 조회에 실패했습니다. 네트워크 상태 또는 release 설정을 확인하세요."
+if ! command -v curl >/dev/null 2>&1; then
+  error "curl 이 필요합니다. 먼저 curl 을 설치해 주세요."
 fi
 
-# git clone 대신 release tarball을 직접 설치하면 사용자가 항상 최신 배포본을
-# 받게 되고, 설치 시점의 main 브랜치 상태에 영향을 받지 않는다.
-PACKAGE_URL="https://github.com/${REPO}/archive/refs/tags/${LATEST_TAG}.tar.gz"
+LATEST_TAG=$(
+  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" |
+    "$PYTHON" -c "import json,sys; print(json.load(sys.stdin)['tag_name'])"
+) || error "최신 release 정보를 가져오지 못했습니다."
 
-# ── 설치 ────────────────────────────────────────────────────────────────────
-info "설치 중... (github.com/${REPO} @ ${LATEST_TAG})"
-"$PYTHON" -m pip install --quiet --upgrade \
-  "${PACKAGE_URL}"
+PACKAGE_URL="git+https://github.com/${REPO}.git@${LATEST_TAG}#subdirectory=${SUBDIR}"
 
-# ── 확인 ────────────────────────────────────────────────────────────────────
-if command -v "$TOOL" &>/dev/null; then
-  info "설치 완료!"
-  echo ""
-  echo "  사용법:"
-  echo "    imgadvisor analyze   --dockerfile Dockerfile"
-  echo "    imgadvisor recommend --dockerfile Dockerfile --output optimized.Dockerfile"
-  echo "    imgadvisor scan      --dockerfile Dockerfile"
-  echo "    imgadvisor validate  --dockerfile Dockerfile --optimized optimized.Dockerfile"
-  echo ""
-  echo "  자세한 도움말:"
-  echo "    imgadvisor --help"
-else
-  warn "'imgadvisor' 명령어를 찾을 수 없습니다."
-  warn "pip install 경로가 PATH에 있는지 확인하세요."
-  warn "  예: export PATH=\"\$HOME/.local/bin:\$PATH\""
+info "최신 release: ${LATEST_TAG}"
+info "가상환경 생성: ${VENV_DIR}"
+"$PYTHON" -m venv "$VENV_DIR"
+
+VENV_PIP="${VENV_DIR}/bin/pip"
+VENV_TOOL="${VENV_DIR}/bin/${TOOL}"
+
+info "패키지 설치: ${PACKAGE_URL}"
+"$VENV_PIP" install --upgrade pip >/dev/null
+"$VENV_PIP" install --force-reinstall "$PACKAGE_URL"
+
+mkdir -p "$BIN_DIR"
+ln -sf "$VENV_TOOL" "${BIN_DIR}/${TOOL}"
+info "실행 링크 생성: ${BIN_DIR}/${TOOL}"
+
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+
+add_path_to_rc() {
+  local rc_file="$1"
+  if [ -f "$rc_file" ] && ! grep -qF "$PATH_LINE" "$rc_file"; then
+    {
+      echo ""
+      echo "# added by imgadvisor installer"
+      echo "$PATH_LINE"
+    } >> "$rc_file"
+    info "PATH 추가: ${rc_file}"
+  fi
+}
+
+if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
+  add_path_to_rc "${HOME}/.bashrc"
+  add_path_to_rc "${HOME}/.bash_profile"
+  add_path_to_rc "${HOME}/.zshrc"
 fi
+
+cat <<EOF
+
+[imgadvisor] 설치가 완료되었습니다.
+
+다음 명령으로 확인할 수 있습니다.
+  ${BIN_DIR}/${TOOL} --help
+
+자주 쓰는 명령:
+  ${TOOL} analyze   -f Dockerfile
+  ${TOOL} recommend -f Dockerfile -o optimized.Dockerfile
+  ${TOOL} validate  -f Dockerfile --optimized optimized.Dockerfile
+  ${TOOL} scan      -f Dockerfile
+
+현재 셸에서 명령이 바로 안 잡히면 아래를 실행하세요.
+  export PATH="${BIN_DIR}:\$PATH"
+  hash -r
+
+EOF
