@@ -42,7 +42,7 @@ python -m pip install --no-cache-dir --force-reinstall \
 
 ```bash
 python -m pip install --no-cache-dir --force-reinstall \
-  "git+https://github.com/0206pdh/dockimage_scanner.git@v0.3.4#subdirectory=dockfile_scanner"
+  "git+https://github.com/0206pdh/dockimage_scanner.git@v0.3.9#subdirectory=dockfile_scanner"
 ```
 
 필수 조건:
@@ -84,7 +84,7 @@ python -m pip install --no-cache-dir --force-reinstall \
 자동으로 보수적으로 보정하는 엔트리포인트:
 
 - `flask run`은 가능할 때 `gunicorn`으로 교체
-- `uvicorn`에 `--workers`가 없으면 `--workers 2` 추가
+- `uvicorn`에 `--workers`가 없으면 경고만 표시하고 자동 고정은 하지 않음
 
 ## 빠른 사용 예시
 
