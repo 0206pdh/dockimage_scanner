@@ -75,8 +75,6 @@ def print_analysis(ir: DockerfileIR, findings: list[Finding]) -> None:
 
     fail_n = sum(1 for f in findings if f.severity == Severity.HIGH)
     warn_n = sum(1 for f in findings if f.severity == Severity.MEDIUM)
-    total_min = sum(f.saving_min_mb for f in findings)
-    total_max = sum(f.saving_max_mb for f in findings)
 
     parts: list[str] = []
     if fail_n:
@@ -84,10 +82,7 @@ def print_analysis(ir: DockerfileIR, findings: list[Finding]) -> None:
     if warn_n:
         parts.append(f"[bold yellow]{warn_n} warnings[/bold yellow]")
 
-    console.print(
-        f"  {'  '.join(parts)}  "
-        f"[dim]|[/dim]  est. savings [green]{total_min:,} ~ {total_max:,} MB[/green]"
-    )
+    console.print(f"  {'  '.join(parts)}")
     console.print(
         f"  [dim]run:[/dim] imgadvisor recommend -f {ir.path}"
     )
@@ -113,12 +108,6 @@ def _print_finding(f: Finding) -> None:
             first = first[:57] + "..."
         console.print(f"           [dim]fix:[/dim] {first}")
 
-    # savings
-    if f.saving_min_mb > 0 or f.saving_max_mb > 0:
-        console.print(
-            f"           [dim]est.[/dim] [green]{f.saving_display}[/green]"
-        )
-
     console.print()
 
 
@@ -126,8 +115,6 @@ def print_recommend_summary(ir: DockerfileIR, findings: list[Finding]) -> None:
     """One-line summary shown before the optimized Dockerfile in recommend mode."""
     fail_n = sum(1 for f in findings if f.severity == Severity.HIGH)
     warn_n = sum(1 for f in findings if f.severity == Severity.MEDIUM)
-    total_min = sum(f.saving_min_mb for f in findings)
-    total_max = sum(f.saving_max_mb for f in findings)
 
     parts: list[str] = []
     if fail_n:
@@ -139,7 +126,6 @@ def print_recommend_summary(ir: DockerfileIR, findings: list[Finding]) -> None:
     console.print(
         f"  [bold]imgadvisor[/bold]  [dim]{ir.path}[/dim]  "
         + "  ".join(parts)
-        + f"  [dim]|[/dim]  est. [green]{total_min:,} ~ {total_max:,} MB[/green]"
     )
 
 
@@ -368,12 +354,8 @@ def print_json_result(ir: DockerfileIR, findings: list[Finding]) -> None:
                 "line_no": f.line_no,
                 "description": f.description,
                 "recommendation": f.recommendation,
-                "saving_min_mb": f.saving_min_mb,
-                "saving_max_mb": f.saving_max_mb,
             }
             for f in findings
         ],
-        "total_saving_min_mb": sum(f.saving_min_mb for f in findings),
-        "total_saving_max_mb": sum(f.saving_max_mb for f in findings),
     }
     console.print_json(json.dumps(data, ensure_ascii=False, indent=2))
