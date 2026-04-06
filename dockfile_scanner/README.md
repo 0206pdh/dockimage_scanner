@@ -111,35 +111,180 @@ Trivy pre-build 검사까지 하고 싶다면:
 imgadvisor scan -f Dockerfile
 ```
 
-## 주요 규칙
+## 최적화 흐름
+
+`imgadvisor`의 최적화는 세 단계로 진행됩니다.
+
+```
+[1] analyze   → Dockerfile을 파싱해 문제(finding) 탐지
+[2] recommend → finding을 기반으로 최적화 Dockerfile 자동 생성
+[3] validate  → 원본/최적화 이미지 실제 빌드 후 크기 비교 (실측)
+```
+
+빌드 없이 문제를 먼저 드러내고(`analyze`), 실행 가능한 결과물을 즉시 만들어(`recommend`), 실제로 얼마나 줄었는지 확인(`validate`)하는 구조입니다.
+
+---
+
+## 탐지 규칙 상세
 
 ### `BASE_IMAGE_NOT_OPTIMIZED`
 
-너무 무거운 base image를 감지하고 더 가벼운 대안을 제안합니다. Python multi-stage 생성 경로에서는 호환성을 위해 Alpine보다 `slim` 쪽을 더 보수적으로 사용합니다.
+**탐지**: `FROM` 라인의 이미지 태그에 `-slim`, `-alpine`, `-distroless` 등이 없는 경우
+
+```dockerfile
+# 탐지됨
+FROM python:3.11
+
+# 권고
+FROM python:3.11-slim
+```
+
+`python:3.11` 풀 이미지는 약 900MB입니다. 런타임에서 불필요한 컴파일러, 헤더 파일, 문서 등이 모두 포함된 상태입니다. `python:3.11-slim`은 약 130MB로, 표준 라이브러리와 pip만 포함합니다.
+
+Python multi-stage 생성 경로에서는 Alpine 대신 slim 계열을 기본으로 선택합니다. Alpine은 musl libc 기반이라 일부 C 확장 패키지(pandas, numpy, psycopg2 등)와 호환 문제가 생길 수 있습니다.
+
+지원하는 베이스 이미지 패턴은 python, node, golang, rust, openjdk, ubuntu, debian, nginx, redis, postgres, mysql 등 30개 이상입니다.
+
+---
 
 ### `BUILD_TOOLS_IN_FINAL_STAGE`
 
-최종 런타임 이미지에 남아 있는 컴파일러와 개발용 패키지를 감지합니다.
+**탐지**: 마지막 `FROM` 스테이지의 `RUN apt-get install`에 빌드 도구가 포함된 경우
 
-### `APT_CACHE_NOT_CLEANED`, `PIP_CACHE_NOT_DISABLED`
+탐지 대상 패키지: `gcc`, `g++`, `make`, `build-essential`, `cmake`, `libffi-dev`, `libpq-dev`, `git`, `wget`, `curl` 등
 
-패키지 설치 후 캐시가 이미지 레이어에 남는 패턴을 감지합니다.
+```dockerfile
+# 탐지됨 — gcc가 런타임 이미지에 남음
+FROM python:3.11
+RUN apt-get install -y gcc libffi-dev
+RUN pip install cryptography
+```
+
+`gcc`는 패키지 빌드 시점에만 필요합니다. 빌드가 끝난 뒤에도 이미지에 남으면 수백 MB가 낭비됩니다. `SINGLE_STAGE_BUILD`와 함께 탐지되면 `recommend`가 multi-stage 구조로 변환합니다.
+
+---
+
+### `APT_CACHE_NOT_CLEANED`
+
+**탐지**: `apt-get install`이 있는 `RUN` 블록에 `rm -rf /var/lib/apt/lists/*`가 없는 경우
+
+```dockerfile
+# 탐지됨 — apt 캐시가 레이어에 남음
+RUN apt-get update && apt-get install -y gcc
+
+# 자동 수정
+RUN apt-get update && apt-get install -y --no-install-recommends gcc \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+Docker는 `RUN` 명령 하나를 레이어 하나로 저장합니다. apt 캐시를 같은 `RUN` 안에서 삭제해야 해당 레이어에 캐시가 포함되지 않습니다. 별도 `RUN rm -rf ...`으로 나누면 이전 레이어에 캐시가 이미 기록되어 있어 삭제 효과가 없습니다.
+
+`--no-install-recommends`도 함께 삽입해 권고 패키지 설치를 막습니다.
+
+---
+
+### `PIP_CACHE_NOT_DISABLED`
+
+**탐지**: `pip install`에 `--no-cache-dir` 플래그가 없는 경우
+
+```dockerfile
+# 탐지됨 — pip 캐시가 이미지에 남음
+RUN pip install flask gunicorn pandas
+
+# 자동 수정
+RUN pip install --no-cache-dir flask gunicorn pandas
+```
+
+pip는 기본적으로 `~/.cache/pip`에 다운로드 캐시를 저장합니다. 컨테이너 이미지에서는 이 캐시를 재사용할 일이 없으므로 레이어 크기만 늘어납니다. `--no-cache-dir`로 캐시 생성 자체를 막습니다.
+
+---
 
 ### `BROAD_COPY_SCOPE`
 
-`.dockerignore` 없이 `COPY . .` 같은 과한 복사 범위를 감지합니다.
+**탐지**: `COPY . .` 또는 `ADD . .` 패턴이 있고 프로젝트 루트에 `.dockerignore`가 없는 경우
+
+```dockerfile
+# 탐지됨
+COPY . .
+```
+
+`.dockerignore`가 없으면 `.git/`, `__pycache__/`, `*.pyc`, 로컬 가상환경(`venv/`, `.venv/`), 테스트 파일, IDE 설정 파일 등이 모두 빌드 컨텍스트에 포함됩니다. 이미지 크기 증가뿐 아니라, 빌드 컨텍스트 전송 시간도 길어집니다.
+
+---
 
 ### `SINGLE_STAGE_BUILD`
 
-Python 단일 스테이지 Dockerfile이 실제 multi-stage 전환 가치가 있는지 판단하고, 조건이 맞으면 builder/runtime 구조의 Dockerfile 본문을 생성합니다.
+**탐지**: `FROM`이 하나뿐이고 빌드 도구(`gcc` 등) 또는 개발 의존성이 포함된 경우
 
-### `PYTHON_RUNTIME_ENVS_MISSING`, `PYTHON_RUNTIME_ENVS_CONFLICT`
+이 규칙이 탐지되면 `recommend`가 원본 Dockerfile을 분석해 builder / runtime 두 스테이지로 재구성합니다.
 
-Python 컨테이너에서 자주 누락되거나 충돌하는 런타임 환경 변수를 감지합니다.
+```
+[원본 단일 스테이지]               [변환 후 multi-stage]
+FROM python:3.11                   FROM python:3.11 AS builder
+RUN apt-get install gcc ...   →    RUN apt-get install gcc ...  ← 빌드 도구: builder에만
+RUN pip install ...                RUN pip install --no-cache-dir ...
+COPY . .                           
+CMD [...]                          FROM python:3.11-slim         ← 경량 runtime
+                                   COPY --from=builder /opt/venv /opt/venv
+                                   COPY --from=builder /app /app
+                                   CMD [...]
+```
 
-### `PYTHON_DEV_SERVER_IN_RUNTIME`, `PYTHON_ASGI_WORKERS_NOT_SET`
+의존성은 builder에서 `/opt/venv`(Python 가상환경)에 설치하고, runtime에는 venv 디렉토리와 앱 파일만 복사합니다. gcc 등 빌드 도구는 최종 이미지에 포함되지 않습니다.
 
-개발 서버를 런타임에서 그대로 쓰는 패턴, ASGI worker 설정 누락을 감지합니다.
+---
+
+### `PYTHON_RUNTIME_ENVS_MISSING`
+
+**탐지**: Python 컨테이너에서 권장 환경 변수가 누락된 경우
+
+자동으로 추가되는 ENV:
+
+| 변수 | 효과 |
+|---|---|
+| `PYTHONUNBUFFERED=1` | stdout/stderr 버퍼링 비활성화. 로그가 즉시 출력됨 |
+| `PYTHONDONTWRITEBYTECODE=1` | `.pyc` 파일 생성 안 함. 이미지 크기 소폭 절감 |
+| `PIP_NO_CACHE_DIR=1` | pip 캐시 전역 비활성화 |
+| `PIP_DISABLE_PIP_VERSION_CHECK=1` | pip 버전 체크 요청 제거 |
+
+`PYTHONUNBUFFERED=1`이 없으면 컨테이너 로그가 버퍼에 쌓여 지연 출력되거나, 비정상 종료 시 마지막 로그가 유실될 수 있습니다.
+
+---
+
+### `PYTHON_DEV_SERVER_IN_RUNTIME`
+
+**탐지**: `CMD` 또는 `ENTRYPOINT`에 개발 서버 패턴이 포함된 경우
+
+탐지 패턴: `flask run`, `python manage.py runserver`, `python -m flask`, `bottle.run` 등
+
+```dockerfile
+# 탐지됨
+CMD flask run --host=0.0.0.0 --port=5000
+
+# 자동 교체 (gunicorn이 설치 목록에 있을 때만)
+CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app"]
+```
+
+`flask run`은 싱글 스레드 개발 서버입니다. 동시 요청이 들어오면 큐에 쌓여 직렬 처리됩니다. `gunicorn`은 멀티 워커 프로세스 기반으로 동시 처리가 가능합니다. 실측 결과 pre1 케이스에서 RPS 872 → 2,392 (약 2.7배) 향상을 확인했습니다.
+
+단, gunicorn이 `pip install` 목록에 없으면 교체하지 않습니다. CMD만 바꾸고 gunicorn이 설치되지 않으면 컨테이너 기동 즉시 실패하기 때문입니다.
+
+---
+
+### `PYTHON_ASGI_WORKERS_NOT_SET`
+
+**탐지**: `uvicorn`을 CMD에서 사용하는데 `--workers` 플래그가 없는 경우
+
+```dockerfile
+# 탐지됨
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+uvicorn 기본값은 단일 워커(싱글 프로세스)입니다. 운영 환경에서는 `--workers N`으로 CPU 코어 수에 맞게 워커 수를 설정해야 합니다.
+
+다만 `imgadvisor`는 worker 수를 자동으로 고정하지 않습니다. CPU 코어 수, 메모리, I/O 비중, 배포 환경 등을 모르는 상태에서 값을 임의로 넣으면 오히려 리소스 경합이나 OOM을 유발할 수 있습니다. 이 규칙은 경고(WARNING) 수준으로 탐지하고 직접 설정하도록 안내합니다.
+
+---
 
 ## Python에서 `recommend`가 생성하는 결과 예시
 
